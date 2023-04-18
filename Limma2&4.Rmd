@@ -1,0 +1,101 @@
+---
+title: "Final Project"
+author: "Aureo Zanon"
+date: "2023-04-06"
+output: pdf_document
+---
+```{r}
+rm(list=ls())
+library(edgeR)
+library(DESeq2)
+```
+
+
+# RNA-seq CMP(2) vs Erythroblast(4)
+
+```{r}
+rawCTCMP1 <- read.table("./CMP/ENCFF623OLU.tsv", header = TRUE, row.names = 1)
+rawCTCMP2 <- read.table("./CMP/ENCFF691MHW.tsv", header = TRUE, row.names = 1)
+rawCTEry1 <- read.table("./Erythroblast/ENCFF342WUL.tsv", header = TRUE, row.names = 1)
+rawCTEry2 <- read.table("./Erythroblast/ENCFF858JHF.tsv", header = TRUE, row.names = 1)
+```
+
+
+## DESeq2
+```{r}
+id<- rawCTEry1$transcript_id.s.
+CMP1ExpCounts <- rawCTCMP1$expected_count
+CMP2ExpCounts <- rawCTCMP2$expected_count
+Ery1ExpCounts <- rawCTEry1$expected_count
+Ery2ExpCounts <- rawCTEry2$expected_count
+Counts24 <- cbind(id,CMP1ExpCounts,CMP2ExpCounts,Ery1ExpCounts,Ery2ExpCounts)
+rownames(Counts24)<-id
+Counts24F<-Counts24[,-1]
+Counts24F<-data.matrix(Counts24F)
+class(Counts24F)<-"numeric"
+colnames(Counts24F)
+colData<-data.frame("CellType" = c("CMP","CMP","Ery","Ery"))
+rownames(colData)<-colnames(Counts24F)
+```
+
+
+
+```{r}
+dds0 <- DESeqDataSetFromMatrix(countData = round(Counts24F), colData = colData, design= ~ CellType)
+keep <- rowSums(counts(dds0)) >= 10 # keep transcripts with more than 10 reads
+dds <- dds0[keep,]
+dds$CellType <- factor(dds$CellType, levels =c("CMP","Ery"))
+```
+
+```{r}
+dds.result <- DESeq(dds)
+res <- results(dds.result)
+resOrdered <- res[order(res$pvalue),] # order results by the smallest p-value
+summary(res)
+sum(res$padj < 0.1, na.rm=TRUE)
+```
+
+
+```{r}
+dds1 <- estimateSizeFactors(dds) 
+dds2 <- estimateDispersions(dds1) 
+plotDispEsts(dds2, cex.lab=1.5 ) 
+dds3 <- nbinomWaldTest(dds2) 
+res2 <- results(dds3)
+hist(res2$pvalue, xlab='Raw p-value', cex.lab=1.5, cex.main=2)
+t <- res$padj < .05 & !is.na(res$padj)
+sig.gn <- rownames(Counts24F)[t]
+```
+
+## Limma-voom
+```{r}
+d0 <- DGEList(round(Counts24F))
+d0 <- calcNormFactors(d0)
+cutoff <- 1
+drop <- which(apply(cpm(d0), 1, max) < cutoff)
+d <- d0[-drop,] 
+dim(d)
+```
+
+```{r}
+group <- c("CMP","CMP","Ery","Ery")
+mm <- model.matrix(~0 + group)
+y <- voom(d, mm, plot = T)
+tmp <- voom(d0, mm, plot = T)
+```
+
+```{r}
+fit <- lmFit(y, mm)
+head(coef(fit))
+```
+
+```{r}
+contr <- makeContrasts(groupCMP - groupEry, levels = colnames(coef(fit)))
+contr
+tmp <- contrasts.fit(fit, contr)
+tmp <- eBayes(tmp)
+top.table <- topTable(tmp, sort.by = "P", n = Inf)
+head(top.table, 20)
+length(which(top.table$adj.P.Val < 0.05))
+```
+
